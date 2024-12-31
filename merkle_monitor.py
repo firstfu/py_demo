@@ -7,14 +7,12 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
 
 
 class FileChangeRecord:
     def __init__(self):
         self.changes = []
-        self.label_encoder = LabelEncoder()
         self.data_file = "file_changes.csv"
         self.init_data_file()
         self.migrate_old_data()
