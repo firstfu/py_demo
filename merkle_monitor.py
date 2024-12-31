@@ -24,7 +24,7 @@ class FileChangeRecord:
         if not os.path.exists(self.data_file):
             with open(self.data_file, "w", encoding="utf-8") as f:
                 f.write(
-                    "timestamp,file_path,change_type,file_size,hour,minute,second,weekday,folder_name,folder_depth\n"
+                    "timestamp,file_path,change_type,hour,minute,second,weekday,folder_name,folder_depth\n"
                 )
 
     def migrate_old_data(self):
@@ -38,7 +38,6 @@ class FileChangeRecord:
                 "timestamp",
                 "file_path",
                 "change_type",
-                "file_size",
                 "hour",
                 "minute",
                 "second",
@@ -90,7 +89,7 @@ class FileChangeRecord:
         except Exception as e:
             print(f"資料遷移過程發生錯誤: {e}")
 
-    def add_record(self, file_path: str, change_type: str, file_size: int):
+    def add_record(self, file_path: str, change_type: str):
         """添加一條變更記錄"""
         now = datetime.now()
         folder_name = os.path.dirname(file_path)
@@ -100,7 +99,6 @@ class FileChangeRecord:
             "timestamp": now.timestamp(),
             "file_path": file_path,
             "change_type": change_type,
-            "file_size": file_size,
             "hour": now.hour,
             "minute": now.minute,
             "second": now.second,
@@ -114,7 +112,7 @@ class FileChangeRecord:
         with open(self.data_file, "a", encoding="utf-8") as f:
             f.write(
                 f"{record['timestamp']},{record['file_path']},{record['change_type']},"
-                f"{record['file_size']},{record['hour']},{record['minute']},"
+                f"{record['hour']},{record['minute']},"
                 f"{record['second']},{record['weekday']},{record['folder_name']},"
                 f"{record['folder_depth']}\n"
             )
@@ -132,9 +130,7 @@ class MLPredictor:
         """初始化預測記錄檔案"""
         if not os.path.exists(self.prediction_log_file):
             with open(self.prediction_log_file, "w", encoding="utf-8") as f:
-                f.write(
-                    "timestamp,predicted_file,predicted_size,actual_file,actual_size,file_correct,size_error\n"
-                )
+                f.write("timestamp,predicted_file,actual_file,file_correct\n")
 
     def load_model(self):
         """載入訓練好的模型"""
@@ -148,7 +144,6 @@ class MLPredictor:
                     if isinstance(models, dict) and "version" in models:
                         if models["version"] >= "2.0":  # 新版本模型
                             self.file_predictor = models["file_predictor"]
-                            self.size_predictor = models["size_predictor"]
                             self.records.label_encoder = models["label_encoder"]
                             self.is_trained = True
                         else:
@@ -164,27 +159,18 @@ class MLPredictor:
         """記錄預測結果"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         predicted_file = prediction.get("predicted_file", "")
-        predicted_size = prediction.get("predicted_size", 0)
 
         # 獲取實際變更資訊
         actual_file = ""
-        actual_size = 0
         if actual_change and "message" not in actual_change:
             actual_file = list(actual_change.keys())[0]
-            try:
-                actual_size = os.path.getsize(actual_file)
-            except:
-                actual_size = 0
 
         # 計算預測準確度
         file_correct = "1" if predicted_file == actual_file else "0"
-        size_error = abs(predicted_size - actual_size) if actual_size > 0 else "N/A"
 
         # 寫入記錄
         with open(self.prediction_log_file, "a", encoding="utf-8") as f:
-            f.write(
-                f"{timestamp},{predicted_file},{predicted_size},{actual_file},{actual_size},{file_correct},{size_error}\n"
-            )
+            f.write(f"{timestamp},{predicted_file},{actual_file},{file_correct}\n")
 
     def predict_next_change(self, current_state: dict) -> Dict[str, any]:
         """預測下一次的檔案變更"""
@@ -238,7 +224,6 @@ class MLPredictor:
                             encoded_file,
                             folder_encoded,
                             folder_depth,
-                            0,  # 當前檔案大小（這裡簡化處理）
                         ]
                     ],
                     dtype=np.float32,
@@ -246,7 +231,6 @@ class MLPredictor:
 
                 # 進行預測
                 predicted_file_idx = self.file_predictor.predict(features)[0]
-                predicted_size = self.size_predictor.predict(features)[0]
 
                 # 將預測的索引轉換回檔案路徑
                 predicted_file = self.records.label_encoder.inverse_transform(
@@ -255,7 +239,6 @@ class MLPredictor:
 
                 return {
                     "predicted_file": predicted_file,
-                    "predicted_size": int(predicted_size),
                 }
             except Exception as e:
                 return {"message": f"預測過程發生錯誤: {str(e)}"}
@@ -403,14 +386,12 @@ class FolderMonitor:
             for file_path in current_hashes:
                 if file_path not in previous_hashes:
                     changes[file_path] = "新增"
-                    self.ml_predictor.records.add_record(
-                        str(file_path), "新增", os.path.getsize(str(file_path))
-                    )
+                    self.ml_predictor.records.add_record(str(file_path), "新增")
 
             for file_path in previous_hashes:
                 if file_path not in current_hashes:
                     changes[file_path] = "刪除"
-                    self.ml_predictor.records.add_record(str(file_path), "刪除", 0)
+                    self.ml_predictor.records.add_record(str(file_path), "刪除")
 
             for file_path in current_hashes:
                 if (
@@ -418,9 +399,7 @@ class FolderMonitor:
                     and current_hashes[file_path] != previous_hashes[file_path]
                 ):
                     changes[file_path] = "修改"
-                    self.ml_predictor.records.add_record(
-                        str(file_path), "修改", os.path.getsize(str(file_path))
-                    )
+                    self.ml_predictor.records.add_record(str(file_path), "修改")
 
             # 如果有上一次的預測，記錄預測結果
             if self.last_prediction:
@@ -478,7 +457,6 @@ def main():
                 if "message" not in prediction:
                     print("\n預測下一次變更：")
                     print(f"預測檔案：{prediction['predicted_file']}")
-                    print(f"預測寫入大小：{prediction['predicted_size']} bytes")
                 else:
                     print(f"\n預測狀態：{prediction['message']}")
 

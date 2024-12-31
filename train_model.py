@@ -4,15 +4,8 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.metrics import (
-    confusion_matrix,
-    f1_score,
-    mean_absolute_error,
-    mean_squared_error,
-    precision_score,
-    recall_score,
-)
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from tabulate import tabulate
@@ -63,12 +56,6 @@ def prepare_features(df: pd.DataFrame):
     df["time_diff"] = df["datetime"].diff().dt.total_seconds()
     df["time_diff"] = df["time_diff"].fillna(0)
 
-    # 檔案大小特徵
-    df["size_diff"] = df["file_size"].diff()
-    df["size_diff"] = df["size_diff"].fillna(0)
-    df["size_ratio"] = df["file_size"] / df["file_size"].shift(1)
-    df["size_ratio"] = df["size_ratio"].fillna(1)
-
     # 建立特徵矩陣
     features = df[
         [
@@ -85,9 +72,6 @@ def prepare_features(df: pd.DataFrame):
             "folder_depth",
             "file_extension_encoded",
             "time_diff",
-            "size_diff",
-            "size_ratio",
-            "file_size",
         ]
     ].values
 
@@ -98,16 +82,15 @@ def prepare_features(df: pd.DataFrame):
     # 準備訓練資料
     X = features[:-1]  # 除了最後一條記錄
     next_files = df["file_path"].values[1:]  # 從第二條記錄開始
-    next_sizes = features[1:, -1]  # 下一次的檔案大小
 
-    return X, next_files, next_sizes, label_encoder, scaler
+    return X, next_files, label_encoder, scaler
 
 
-def train_models(X, next_files, next_sizes):
+def train_models(X, next_files):
     """訓練模型"""
     # 分割訓練集和測試集
-    X_train, X_test, files_train, files_test, sizes_train, sizes_test = (
-        train_test_split(X, next_files, next_sizes, test_size=0.2, random_state=42)
+    X_train, X_test, files_train, files_test = train_test_split(
+        X, next_files, test_size=0.2, random_state=42
     )
 
     print(f"\n資料集大小:")
@@ -145,27 +128,6 @@ def train_models(X, next_files, next_sizes):
     file_f1 = f1_score(files_test, file_pred, average="weighted")
     conf_matrix = confusion_matrix(files_test, file_pred)
 
-    # 訓練大小預測模型
-    print("\n訓練檔案大小預測模型...")
-    size_predictor = RandomForestRegressor(
-        n_estimators=200,  # 增加樹的數量
-        max_depth=15,  # 增加樹的深度
-        min_samples_split=5,  # 減少分裂所需的最小樣本數
-        min_samples_leaf=2,  # 減少葉節點的最小樣本數
-        bootstrap=True,  # 使用bootstrap採樣
-        random_state=42,
-        n_jobs=-1,  # 使用所有CPU核心
-        verbose=1,
-    )
-    size_predictor.fit(X_train, sizes_train)
-
-    # 計算迴歸模型的評估指標
-    size_pred = size_predictor.predict(X_test)
-    size_score = size_predictor.score(X_test, sizes_test)
-    size_mae = mean_absolute_error(sizes_test, size_pred)
-    size_mse = mean_squared_error(sizes_test, size_pred)
-    size_rmse = np.sqrt(size_mse)
-
     # 打印特徵重要性
     feature_names = [
         "小時(sin)",
@@ -181,9 +143,6 @@ def train_models(X, next_files, next_sizes):
         "資料夾深度",
         "副檔名編碼",
         "時間差",
-        "大小差異",
-        "大小比率",
-        "檔案大小",
     ]
 
     print("\n檔案預測模型 - 特徵重要性:")
@@ -193,13 +152,6 @@ def train_models(X, next_files, next_sizes):
     ]
     print(tabulate(feature_importance, headers=["特徵", "重要性"], tablefmt="grid"))
 
-    print("\n檔案大小預測模型 - 特徵重要性:")
-    size_importance = [
-        [name, f"{importance:.4f}"]
-        for name, importance in zip(feature_names, size_predictor.feature_importances_)
-    ]
-    print(tabulate(size_importance, headers=["特徵", "重要性"], tablefmt="grid"))
-
     metrics = {
         "file": {
             "accuracy": file_accuracy,
@@ -207,19 +159,17 @@ def train_models(X, next_files, next_sizes):
             "recall": file_recall,
             "f1": file_f1,
             "confusion_matrix": conf_matrix,
-        },
-        "size": {"r2": size_score, "mae": size_mae, "mse": size_mse, "rmse": size_rmse},
+        }
     }
 
-    return file_predictor, size_predictor, metrics
+    return file_predictor, metrics
 
 
-def save_models(file_predictor, size_predictor, label_encoder, scaler, model_file: str):
+def save_models(file_predictor, label_encoder, scaler, model_file: str):
     """儲存訓練好的模型"""
     models = {
         "version": "3.0",  # 更新版本標記
         "file_predictor": file_predictor,
-        "size_predictor": size_predictor,
         "label_encoder": label_encoder,
         "scaler": scaler,  # 新增 scaler
     }
@@ -238,13 +188,11 @@ def main():
         print(f"成功載入 {len(df)} 筆資料")
 
         print("\n準備特徵資料...")
-        X, next_files, next_sizes, label_encoder, scaler = prepare_features(df)
+        X, next_files, label_encoder, scaler = prepare_features(df)
         print("特徵資料準備完成")
 
         print("\n開始訓練模型...")
-        file_predictor, size_predictor, metrics = train_models(
-            X, next_files, next_sizes
-        )
+        file_predictor, metrics = train_models(X, next_files)
 
         # 檔案預測模型結果表格
         file_metrics = [
@@ -256,18 +204,8 @@ def main():
         print("\n檔案預測模型評估結果:")
         print(tabulate(file_metrics, headers=["指標", "數值"], tablefmt="grid"))
 
-        # 檔案大小預測模型結果表格
-        size_metrics = [
-            ["R² 分數", f"{metrics['size']['r2']:.2%}"],
-            ["平均絕對誤差 (MAE)", f"{metrics['size']['mae']:.2f}"],
-            ["均方誤差 (MSE)", f"{metrics['size']['mse']:.2f}"],
-            ["均方根誤差 (RMSE)", f"{metrics['size']['rmse']:.2f}"],
-        ]
-        print("\n檔案大小預測模型評估結果:")
-        print(tabulate(size_metrics, headers=["指標", "數值"], tablefmt="grid"))
-
         print("\n儲存模型...")
-        save_models(file_predictor, size_predictor, label_encoder, scaler, model_file)
+        save_models(file_predictor, label_encoder, scaler, model_file)
         print(f"模型已儲存至 {model_file}")
 
     except Exception as e:
